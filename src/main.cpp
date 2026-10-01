@@ -13,24 +13,27 @@
 #include <time.h>
 #include "temperature_history.h"
 
+// Use local credentials; the example lets an unconfigured project still build.
 #if __has_include("thermometer_config.h")
 #include "thermometer_config.h"
 #else
 #include "thermometer_config.example.h"
 #endif
 
+// Built-in LCD wiring for the Waveshare ESP32-S3-LCD-1.28.
 constexpr uint8_t LCD_DC = 8, LCD_CS = 9, LCD_SCK = 10;
 constexpr uint8_t LCD_MOSI = 11, LCD_RST = 12, LCD_BL = 40;
 constexpr uint32_t WIFI_RETRY_MS = 15000;
 Adafruit_GC9A01A display(&SPI, LCD_DC, LCD_CS, LCD_RST);
 uint32_t lastWifiAttempt = 0, lastPoll = 0;
 bool wasConnected = false;
+// Remember what is on screen so unchanged data does not cause a redraw.
 String previousStatus;
 String previousReading;
 bool welcomeVisible = true;
 constexpr uint32_t WELCOME_MIN_MS = 2500;
 uint32_t welcomeStarted = 0;
-GFXcanvas16 centreCanvas(168, 104);
+GFXcanvas16 centreCanvas(168, 104); // Off-screen colour buffer for the centre panel.
 int previousGaugeFill = -1;
 TemperatureHistory history;
 TemperatureHistory::Trend previousTrend = TemperatureHistory::Trend::Unknown;
@@ -58,6 +61,7 @@ void drawGauge(float celsius, bool valid) {
                                      (GAUGE_MAX_C - GAUGE_MIN_C), 0.0f, 1.0f);
     const int filled = valid ? static_cast<int>(roundf(fraction * GAUGE_SEGMENTS)) : 0;
     if (filled == previousGaugeFill) return;
+    // Repaint only changed segments, plus their neighbours to cover overlaps.
     const int first = previousGaugeFill < 0 ? 0 : max(0, min(filled, previousGaugeFill) - 1);
     const int last = previousGaugeFill < 0 ? GAUGE_SEGMENTS : min(GAUGE_SEGMENTS, max(filled, previousGaugeFill) + 1);
     // fillTriangle manages its own SPI transaction. Wrapping it in startWrite
@@ -81,6 +85,7 @@ void drawGauge(float celsius, bool valid) {
     previousGaugeFill = filled;
 }
 
+// Fixed labels go straight to the LCD; changing text goes to the canvas below.
 void centeredText(const char *text, int16_t y, uint8_t size, uint16_t color) {
     display.setTextSize(size);
     display.setTextColor(color, GC9A01A_BLACK);
@@ -101,6 +106,7 @@ void canvasText(const char *text, int16_t y, uint8_t size, uint16_t color) {
     centreCanvas.print(text);
 }
 
+// Graph coordinates are relative to the centre panel, not the full display.
 void drawHistory(uint32_t now) {
     constexpr int LEFT = 6, RIGHT = 161, TOP = 80, BOTTOM = 102;
     centreCanvas.setTextSize(1);
@@ -118,6 +124,7 @@ void drawHistory(uint32_t now) {
         high = fmaxf(high, sample.celsius);
     }
     if (!isfinite(low)) return;
+    // Auto-scale vertically, with a 2 C minimum span to avoid exaggerating noise.
     const float middle = (low + high) * 0.5f;
     const float span = fmaxf(2.0f, high - low + 0.4f);
     low = middle - span * 0.5f;
@@ -128,6 +135,7 @@ void drawHistory(uint32_t now) {
         const auto &sample = history.at(i);
         const uint32_t age = now - sample.time;
         if (age > TemperatureHistory::WINDOW_MS) continue;
+        // Oldest readings are on the left; missing periods are not joined.
         const int x = RIGHT - lroundf(float(age) / TemperatureHistory::WINDOW_MS * (RIGHT - LEFT));
         const int y = BOTTOM - 1 - lroundf((sample.celsius - low) / span * (BOTTOM - TOP - 1));
         if (havePrevious && uint32_t(sample.time - previousTime) <= TemperatureHistory::MAX_GAP_MS)
@@ -138,6 +146,7 @@ void drawHistory(uint32_t now) {
     }
 }
 
+// Draw a small arrow and label; the history class decides the direction.
 void drawTrend(TemperatureHistory::Trend trend) {
     using Trend = TemperatureHistory::Trend;
     const char *label = trend == Trend::Rising ? "Warming" :
@@ -171,6 +180,7 @@ void renderCentre(const char *reading, const char *status, bool valid,
         uint16_t width, height;
         centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
         constexpr int SUFFIX_SPACE = 16;
+        // Reduce the digit size for long readings and reserve room for the small c.
         if (width + SUFFIX_SPACE > 164) {
             centreCanvas.setFont(&FreeSans18pt7b);
             centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
@@ -192,6 +202,7 @@ void renderCentre(const char *reading, const char *status, bool valid,
     display.drawRGBBitmap(36, 80, centreCanvas.getBuffer(), 168, 104);
 }
 
+// Errors replace the reading and clear the gauge so stale data looks unavailable.
 void showStatus(const char *status) {
     if (previousStatus == status) return;
     previousStatus = status;
@@ -205,6 +216,7 @@ bool configured() {
            strlen(HA_ENTITY_ID) && HA_POLL_INTERVAL_MS >= 1000;
 }
 
+// One authenticated request per poll; errors are handled without restarting Wi-Fi.
 void fetchTemperature() {
     String base(HA_BASE_URL);
     while (base.endsWith("/")) base.remove(base.length() - 1);
@@ -264,6 +276,7 @@ void fetchTemperature() {
         return;
     }
     const char *state = document["state"] | "";
+    // HA states are strings: reject unknown/unavailable and partially numeric text.
     char *end = nullptr;
     const float value = strtof(state, &end);
     if (end == state) {
@@ -276,6 +289,7 @@ void fetchTemperature() {
         return;
     }
     const char *unit = document["attributes"]["unit_of_measurement"] | "";
+    // Normalize the source unit before displaying or storing the temperature.
     float celsius = value;
     if (!strcmp(unit, "\xC2\xB0" "F")) celsius = (value - 32.0f) / 1.8f;
     else if (!strcmp(unit, "K")) celsius = value - 273.15f;
@@ -293,6 +307,7 @@ void fetchTemperature() {
     const uint32_t sampleTime = millis();
     const bool historyChanged = history.record(celsius, sampleTime);
     const auto trend = history.trend(celsius, sampleTime);
+    // A new minute sample can change the graph even when the digits stay the same.
     if (previousReading != reading || previousStatus != "Connected" || historyChanged || trend != previousTrend) {
         renderCentre(reading, "Connected", true, trend);
         previousReading = reading;
@@ -303,6 +318,7 @@ void fetchTemperature() {
     Serial.printf("Temperature: %.2f C\n", celsius);
 }
 
+// Runs once at boot: light the display first, then begin the Wi-Fi connection.
 void setup() {
     Serial.begin(115200);
     pinMode(LCD_BL, OUTPUT);
@@ -338,6 +354,7 @@ void setup() {
     showStatus("Connecting Wi-Fi...");
 }
 
+// Runs repeatedly: retry Wi-Fi or poll HA when due, leaving the display in place.
 void loop() {
     if (!configured()) {
         delay(100);

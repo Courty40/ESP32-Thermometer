@@ -15,6 +15,7 @@ public:
     bool record(float value, uint32_t now) {
         if (!isfinite(value)) return false;
         if (count_ && uint32_t(now - at(count_ - 1).time) < SAMPLE_MS) return false;
+        // Circular buffer: new samples overwrite the oldest once storage is full.
         samples_[next_] = {value, now};
         next_ = (next_ + 1) % CAPACITY;
         if (count_ < CAPACITY) ++count_;
@@ -22,6 +23,7 @@ public:
     }
     uint8_t count() const { return count_; }
     const Sample &at(uint8_t index) const {
+        // Present samples in time order: index 0 is the oldest stored reading.
         return samples_[(next_ + CAPACITY - count_ + index) % CAPACITY];
     }
     Trend trend(float current, uint32_t now) const {
@@ -35,6 +37,7 @@ public:
             if (age >= TREND_MS) {
                 if (age > TREND_MS + MAX_GAP_MS) return Trend::Unknown;
                 const float change = current - at(i).celsius;
+                // Ignore small steps so the arrow does not react to sensor noise.
                 if (change >= 0.2f) return Trend::Rising;
                 if (change <= -0.2f) return Trend::Falling;
                 return Trend::Steady;
