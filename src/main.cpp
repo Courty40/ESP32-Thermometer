@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <Adafruit_GC9A01A.h>
+#include <Fonts/FreeSans24pt7b.h>
+#include <Fonts/FreeSans18pt7b.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -8,6 +10,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <time.h>
+#include "temperature_history.h"
 
 #if __has_include("thermometer_config.h")
 #include "thermometer_config.h"
@@ -28,6 +31,8 @@ constexpr uint32_t WELCOME_MIN_MS = 2500;
 uint32_t welcomeStarted = 0;
 GFXcanvas16 centreCanvas(168, 104);
 int previousGaugeFill = -1;
+TemperatureHistory history;
+TemperatureHistory::Trend previousTrend = TemperatureHistory::Trend::Unknown;
 
 // Clockwise 270-degree gauge: -10 C at bottom-left, +40 C at bottom-right.
 constexpr float GAUGE_MIN_C = -10.0f, GAUGE_MAX_C = 40.0f;
@@ -86,6 +91,7 @@ void centeredText(const char *text, int16_t y, uint8_t size, uint16_t color) {
 }
 
 void canvasText(const char *text, int16_t y, uint8_t size, uint16_t color) {
+    centreCanvas.setFont(nullptr);
     centreCanvas.setTextSize(size);
     centreCanvas.setTextColor(color);
     centreCanvas.setTextWrap(false);
@@ -94,13 +100,88 @@ void canvasText(const char *text, int16_t y, uint8_t size, uint16_t color) {
     centreCanvas.print(text);
 }
 
-void renderCentre(const char *reading, const char *status, bool valid) {
+void drawHistory(uint32_t now) {
+    constexpr int LEFT = 6, RIGHT = 161, TOP = 80, BOTTOM = 102;
+    centreCanvas.setTextSize(1);
+    centreCanvas.setTextColor(GC9A01A_DARKGREY);
+    centreCanvas.setCursor(LEFT, 69);
+    centreCanvas.print("-1h");
+    centreCanvas.setCursor(RIGHT - 18, 69);
+    centreCanvas.print("now");
+    centreCanvas.drawFastHLine(LEFT, BOTTOM, RIGHT - LEFT + 1, GC9A01A_DARKGREY);
+    float low = INFINITY, high = -INFINITY;
+    for (uint8_t i = 0; i < history.count(); ++i) {
+        const auto &sample = history.at(i);
+        if (uint32_t(now - sample.time) > TemperatureHistory::WINDOW_MS) continue;
+        low = fminf(low, sample.celsius);
+        high = fmaxf(high, sample.celsius);
+    }
+    if (!isfinite(low)) return;
+    const float middle = (low + high) * 0.5f;
+    const float span = fmaxf(2.0f, high - low + 0.4f);
+    low = middle - span * 0.5f;
+    bool havePrevious = false;
+    int previousX = 0, previousY = 0;
+    uint32_t previousTime = 0;
+    for (uint8_t i = 0; i < history.count(); ++i) {
+        const auto &sample = history.at(i);
+        const uint32_t age = now - sample.time;
+        if (age > TemperatureHistory::WINDOW_MS) continue;
+        const int x = RIGHT - lroundf(float(age) / TemperatureHistory::WINDOW_MS * (RIGHT - LEFT));
+        const int y = BOTTOM - 1 - lroundf((sample.celsius - low) / span * (BOTTOM - TOP - 1));
+        if (havePrevious && uint32_t(sample.time - previousTime) <= TemperatureHistory::MAX_GAP_MS)
+            centreCanvas.drawLine(previousX, previousY, x, y, GC9A01A_CYAN);
+        centreCanvas.drawPixel(x, y, GC9A01A_CYAN);
+        havePrevious = true;
+        previousX = x; previousY = y; previousTime = sample.time;
+    }
+}
+
+void drawTrend(TemperatureHistory::Trend trend) {
+    using Trend = TemperatureHistory::Trend;
+    const char *label = trend == Trend::Rising ? "Warming" :
+                        trend == Trend::Falling ? "Cooling" :
+                        trend == Trend::Steady ? "Steady" : "Learning...";
+    const uint16_t color = trend == Trend::Rising ? GC9A01A_ORANGE :
+                           trend == Trend::Falling ? GC9A01A_CYAN : GC9A01A_LIGHTGREY;
+    canvasText(label, 54, 1, color);
+    if (trend == Trend::Unknown) return;
+    const int x = 42;
+    if (trend == Trend::Steady) {
+        centreCanvas.drawLine(x - 6, 57, x + 5, 57, color);
+        centreCanvas.fillTriangle(x + 7, 57, x + 3, 54, x + 3, 60, color);
+    } else {
+        const int tip = trend == Trend::Rising ? 51 : 62;
+        const int tail = trend == Trend::Rising ? 62 : 51;
+        centreCanvas.drawLine(x, tail, x, tip, color);
+        centreCanvas.fillTriangle(x, tip, x - 4, (tip + tail) / 2, x + 4, (tip + tail) / 2, color);
+    }
+}
+
+void renderCentre(const char *reading, const char *status, bool valid,
+                  TemperatureHistory::Trend trend = TemperatureHistory::Trend::Unknown) {
     // Compose in RAM, then transfer once: no visible clear/redraw cycle.
     centreCanvas.fillScreen(GC9A01A_BLACK);
-    const uint8_t size = strlen(reading) > 5 ? 3 : 5;
-    canvasText(reading, 15, size, valid ? GC9A01A_CYAN : GC9A01A_WHITE);
-    if (valid) canvasText("Celsius", 65, 2, GC9A01A_WHITE);
-    canvasText(status, 90, 1, valid ? GC9A01A_GREEN : GC9A01A_YELLOW);
+    if (valid) {
+        centreCanvas.setTextSize(1);
+        centreCanvas.setTextColor(GC9A01A_CYAN);
+        centreCanvas.setFont(&FreeSans24pt7b);
+        int16_t x1, y1;
+        uint16_t width, height;
+        centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
+        if (width > 164) {
+            centreCanvas.setFont(&FreeSans18pt7b);
+            centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
+        }
+        centreCanvas.setCursor((168 - static_cast<int>(width)) / 2 - x1, 3 - y1);
+        centreCanvas.print(reading);
+        canvasText("Celsius", 44, 1, GC9A01A_WHITE);
+        drawTrend(trend);
+        drawHistory(millis());
+    } else {
+        canvasText(reading, 15, strlen(reading) > 5 ? 3 : 5, GC9A01A_WHITE);
+        canvasText(status, 90, 1, GC9A01A_YELLOW);
+    }
     display.drawRGBBitmap(36, 80, centreCanvas.getBuffer(), 168, 104);
 }
 
@@ -196,16 +277,20 @@ void fetchTemperature() {
         return;
     }
     char reading[24];
-    snprintf(reading, sizeof(reading), "%.1f", celsius);
+    snprintf(reading, sizeof(reading), "%.2f", celsius);
     if (strlen(reading) > 8) {
         showStatus("Temperature out of range");
         return;
     }
     welcomeVisible = false;
-    if (previousReading != reading || previousStatus != "Connected") {
-        renderCentre(reading, "Connected", true);
+    const uint32_t sampleTime = millis();
+    const bool historyChanged = history.record(celsius, sampleTime);
+    const auto trend = history.trend(celsius, sampleTime);
+    if (previousReading != reading || previousStatus != "Connected" || historyChanged || trend != previousTrend) {
+        renderCentre(reading, "Connected", true, trend);
         previousReading = reading;
         previousStatus = "Connected";
+        previousTrend = trend;
     }
     drawGauge(celsius, true);
     Serial.printf("Temperature: %.2f C\n", celsius);
@@ -226,7 +311,6 @@ void setup() {
     welcomeStarted = millis();
     Serial.println("Display initialized; drawing temperature gauge.");
     drawGauge(0, false);
-    centeredText("THERMOMETER", 45, 2, GC9A01A_WHITE);
     centeredText("Home Assistant", 200, 1, GC9A01A_DARKGREY);
     display.setTextSize(1);
     display.setTextColor(GC9A01A_BLUE);

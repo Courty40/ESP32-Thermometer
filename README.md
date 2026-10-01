@@ -1,6 +1,6 @@
 # Waveshare Home Assistant thermometer
 
-PlatformIO / Arduino firmware for the non-touch ESP32-S3-LCD-1.28. Connects to 2.4 GHz Wi-Fi and reads one temperature sensor through Home Assistant's REST API every 10 seconds. Shows Celsius with one decimal place; Fahrenheit and Kelvin source units are converted. No DS18B20 wiring is needed.
+PlatformIO / Arduino firmware for the non-touch ESP32-S3-LCD-1.28. Connects to 2.4 GHz Wi-Fi and reads one temperature sensor through Home Assistant's REST API every 10 seconds. Shows Celsius with two decimal places using proportional FreeSans digits; Fahrenheit and Kelvin source units are converted. No DS18B20 wiring is needed.
 
 ## Setup
 
@@ -15,6 +15,10 @@ PlatformIO / Arduino firmware for the non-touch ESP32-S3-LCD-1.28. Connects to 2
 The REST API uses authenticated `GET /api/states/<entity_id>` requests. It only reads the selected entity. Local HTTP sends the token without transport encryption, so use it only on your trusted LAN. HTTPS is also supported: set an HTTPS URL, supply its root CA certificate in `HA_ROOT_CA`, and set `NTP_SERVER` to a reachable time server. HTTPS waits for clock synchronization and validates the certificate; certificates must match the hostname/IP in the URL.
 
 ## Behaviour and troubleshooting
+
+The trend arrow compares the current reading with a continuous five-minute baseline: warming at +0.2 °C or more, cooling at -0.2 °C or less, and steady otherwise. It shows Learning... until there is enough recent history, including after a long connection gap.
+
+The small graph shows up to the last hour, collected locally once per minute in a fixed 61-sample buffer (488 bytes). It needs no extra API calls, starts empty on restart, and leaves gaps across outages longer than 90 seconds. Its vertical scale adjusts to the recorded temperatures, with a minimum 2 °C span; the horizontal scale stays fixed at one hour. Only new history samples, changed readings, or changed trend/status trigger a centre-panel redraw. The graph and arrow share the existing buffered panel; the heading was removed to keep the display uncluttered.
 
 A welcome screen appears as soon as the LCD is initialized and remains while Wi-Fi and Home Assistant connect. The centre panel is composed in memory before transfer to reduce flicker. Unchanged readings are not redrawn, and only changed ring segments are updated.
 
