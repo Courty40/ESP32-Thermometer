@@ -3,6 +3,7 @@
 #include <Adafruit_GC9A01A.h>
 #include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -169,12 +170,18 @@ void renderCentre(const char *reading, const char *status, bool valid,
         int16_t x1, y1;
         uint16_t width, height;
         centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
-        if (width > 164) {
+        constexpr int SUFFIX_SPACE = 16;
+        if (width + SUFFIX_SPACE > 164) {
             centreCanvas.setFont(&FreeSans18pt7b);
             centreCanvas.getTextBounds(reading, 0, 0, &x1, &y1, &width, &height);
         }
-        centreCanvas.setCursor((168 - static_cast<int>(width)) / 2 - x1, 3 - y1);
+        const int left = (168 - static_cast<int>(width) - SUFFIX_SPACE) / 2;
+        const int baseline = 3 - y1;
+        centreCanvas.setCursor(left - x1, baseline);
         centreCanvas.print(reading);
+        centreCanvas.setFont(&FreeSans9pt7b);
+        centreCanvas.setCursor(left + width + 4, baseline);
+        centreCanvas.print("c");
         canvasText("Celsius", 44, 1, GC9A01A_WHITE);
         drawTrend(trend);
         drawHistory(millis());
