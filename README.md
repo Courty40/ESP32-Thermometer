@@ -6,7 +6,7 @@ PlatformIO / Arduino firmware for the non-touch ESP32-S3-LCD-1.28. Connects to 2
 
 1. Copy `include/thermometer_config.example.h` to `include/thermometer_config.h`.
 2. In `thermometer_config.h`, enter your Wi-Fi SSID and password.
-3. The configured Home Assistant URL is `http://homeassistant.local:8123`. Adjust the port or scheme if your instance uses something different. A reserved DHCP address is useful.
+3. Set `HA_BASE_URL` to your Home Assistant URL, for example `http://homeassistant.local:8123`. Adjust the host, port, or scheme for your instance. A reserved DHCP address is useful.
 4. In Home Assistant, open **Developer Tools → States**, find the temperature sensor, and copy its entity ID into `HA_ENTITY_ID`. This version reads the entity's numeric state (not a climate/weather entity's temperature attribute).
 5. Open your Home Assistant user profile's **Security** tab and create a **Long-Lived Access Token**. Paste it into `HA_TOKEN` locally. Do not paste it into chat. The private `thermometer_config.h` is ignored by Git; credentials are still compiled into the firmware.
 6. Open this folder in VS Code with PlatformIO. Click **Build**, connect the board using a USB data cable, then click **Upload**.
