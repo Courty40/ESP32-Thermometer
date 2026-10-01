@@ -22,6 +22,10 @@ Adafruit_GC9A01A display(&SPI, LCD_DC, LCD_CS, LCD_RST);
 uint32_t lastWifiAttempt = 0, lastPoll = 0;
 bool wasConnected = false;
 String previousStatus;
+String previousReading;
+bool welcomeVisible = true;
+GFXcanvas16 centreCanvas(168, 104);
+int previousGaugeFill = -1;
 
 // Clockwise 270-degree gauge: -10 C at bottom-left, +40 C at bottom-right.
 constexpr float GAUGE_MIN_C = -10.0f, GAUGE_MAX_C = 40.0f;
@@ -45,9 +49,12 @@ void drawGauge(float celsius, bool valid) {
     const float fraction = constrain((celsius - GAUGE_MIN_C) /
                                      (GAUGE_MAX_C - GAUGE_MIN_C), 0.0f, 1.0f);
     const int filled = valid ? static_cast<int>(roundf(fraction * GAUGE_SEGMENTS)) : 0;
+    if (filled == previousGaugeFill) return;
+    const int first = previousGaugeFill < 0 ? 0 : max(0, min(filled, previousGaugeFill) - 1);
+    const int last = previousGaugeFill < 0 ? GAUGE_SEGMENTS : min(GAUGE_SEGMENTS, max(filled, previousGaugeFill) + 1);
     // fillTriangle manages its own SPI transaction. Wrapping it in startWrite
     // nests beginTransaction calls and can deadlock the ESP32 SPI mutex.
-    for (int i = 0; i < GAUGE_SEGMENTS; ++i) {
+    for (int i = first; i < last; ++i) {
         const float a = (135.0f + i) * PI / 180.0f;
         const float b = (136.1f + i) * PI / 180.0f; // Slight overlap avoids gaps.
         const int16_t x0 = lroundf(120 + 108 * cosf(a));
@@ -63,6 +70,7 @@ void drawGauge(float celsius, bool valid) {
         display.fillTriangle(x0, y0, x1, y1, x2, y2, color);
         display.fillTriangle(x0, y0, x2, y2, x3, y3, color);
     }
+    previousGaugeFill = filled;
 }
 
 void centeredText(const char *text, int16_t y, uint8_t size, uint16_t color) {
@@ -75,16 +83,33 @@ void centeredText(const char *text, int16_t y, uint8_t size, uint16_t color) {
     display.print(text);
 }
 
+void canvasText(const char *text, int16_t y, uint8_t size, uint16_t color) {
+    centreCanvas.setTextSize(size);
+    centreCanvas.setTextColor(color);
+    centreCanvas.setTextWrap(false);
+    const int width = strlen(text) * 6 * size;
+    centreCanvas.setCursor((centreCanvas.width() - width) / 2, y);
+    centreCanvas.print(text);
+}
+
+void renderCentre(const char *reading, const char *status, bool valid) {
+    // Compose in RAM, then transfer once: no visible clear/redraw cycle.
+    centreCanvas.fillScreen(GC9A01A_BLACK);
+    const uint8_t size = strlen(reading) > 5 ? 3 : 5;
+    canvasText(reading, 15, size, valid ? GC9A01A_CYAN : GC9A01A_WHITE);
+    if (valid) canvasText("Celsius", 65, 2, GC9A01A_WHITE);
+    canvasText(status, 90, 1, valid ? GC9A01A_GREEN : GC9A01A_YELLOW);
+    display.drawRGBBitmap(36, 80, centreCanvas.getBuffer(), 168, 104);
+}
+
 void showStatus(const char *status) {
     if (previousStatus == status) return;
     previousStatus = status;
-    display.fillRect(15, 85, 210, 100, GC9A01A_BLACK);
-    centeredText("--.-", 95, 5, GC9A01A_DARKGREY);
-    centeredText(status, 165, 1, GC9A01A_YELLOW);
+    previousReading = "";
+    renderCentre(welcomeVisible ? "Welcome" : "--.-", status, false);
     drawGauge(0, false);
     Serial.println(status);
 }
-
 bool configured() {
     return strlen(WIFI_SSID) && strlen(HA_BASE_URL) && strlen(HA_TOKEN) &&
            strlen(HA_ENTITY_ID) && HA_POLL_INTERVAL_MS >= 1000;
@@ -174,11 +199,12 @@ void fetchTemperature() {
         showStatus("Temperature out of range");
         return;
     }
-    previousStatus = "";
-    display.fillRect(15, 85, 210, 100, GC9A01A_BLACK);
-    centeredText(reading, 95, strlen(reading) > 6 ? 3 : (strlen(reading) > 5 ? 4 : 5), GC9A01A_CYAN);
-    centeredText("Celsius", 145, 2, GC9A01A_WHITE);
-    centeredText("Connected", 175, 1, GC9A01A_GREEN);
+    welcomeVisible = false;
+    if (previousReading != reading || previousStatus != "Connected") {
+        renderCentre(reading, "Connected", true);
+        previousReading = reading;
+        previousStatus = "Connected";
+    }
     drawGauge(celsius, true);
     Serial.printf("Temperature: %.2f C\n", celsius);
 }
@@ -194,6 +220,7 @@ void setup() {
     display.setTextWrap(false);
     display.fillScreen(GC9A01A_BLACK);
     digitalWrite(LCD_BL, HIGH);
+    renderCentre("Welcome", "Starting...", false);
     Serial.println("Display initialized; drawing temperature gauge.");
     drawGauge(0, false);
     centeredText("THERMOMETER", 45, 2, GC9A01A_WHITE);
@@ -207,7 +234,7 @@ void setup() {
     display.print("+40");
     digitalWrite(LCD_BL, HIGH);
     if (!configured()) {
-        showStatus("Set up include/thermometer_config.h");
+        showStatus("Set up configuration");
         return;
     }
     WiFi.mode(WIFI_STA);
@@ -234,10 +261,12 @@ void loop() {
         if (!wasConnected && String(HA_BASE_URL).startsWith("https://")) {
             configTime(0, 0, NTP_SERVER);
         }
+        if (!wasConnected) showStatus("Connecting to HA...");
         wasConnected = true;
         lastPoll = now;
         fetchTemperature();
     }
     delay(10);
 }
+
 

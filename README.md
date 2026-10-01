@@ -16,6 +16,8 @@ The REST API uses authenticated `GET /api/states/<entity_id>` requests. It only 
 
 ## Behaviour and troubleshooting
 
+A welcome screen appears as soon as the LCD is initialized and remains while Wi-Fi and Home Assistant connect. The centre panel is composed in memory before transfer to reduce flicker. Unchanged readings are not redrawn, and only changed ring segments are updated.
+
 The outer gauge fills clockwise from -10 °C at bottom-left to +40 °C at bottom-right, with a blue → cyan → green → yellow → red gradient. The remaining arc is grey. Values outside the range clamp the gauge to empty/full while the numeric reading remains unchanged. Connection errors clear the coloured arc.
 
 - The firmware retries Wi-Fi connections and polls Home Assistant automatically.
