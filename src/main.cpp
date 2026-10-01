@@ -24,6 +24,8 @@ bool wasConnected = false;
 String previousStatus;
 String previousReading;
 bool welcomeVisible = true;
+constexpr uint32_t WELCOME_MIN_MS = 2500;
+uint32_t welcomeStarted = 0;
 GFXcanvas16 centreCanvas(168, 104);
 int previousGaugeFill = -1;
 
@@ -221,6 +223,7 @@ void setup() {
     display.fillScreen(GC9A01A_BLACK);
     digitalWrite(LCD_BL, HIGH);
     renderCentre("Welcome", "Starting...", false);
+    welcomeStarted = millis();
     Serial.println("Display initialized; drawing temperature gauge.");
     drawGauge(0, false);
     centeredText("THERMOMETER", 45, 2, GC9A01A_WHITE);
@@ -258,6 +261,12 @@ void loop() {
             WiFi.reconnect();
         }
     } else if (!wasConnected || now - lastPoll >= HA_POLL_INTERVAL_MS) {
+        // Wi-Fi connects immediately, but keep Welcome readable before the first poll.
+        if (welcomeVisible && now - welcomeStarted < WELCOME_MIN_MS) {
+            showStatus("Wi-Fi connected");
+            delay(10);
+            return;
+        }
         if (!wasConnected && String(HA_BASE_URL).startsWith("https://")) {
             configTime(0, 0, NTP_SERVER);
         }

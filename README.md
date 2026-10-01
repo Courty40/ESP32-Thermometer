@@ -18,6 +18,8 @@ The REST API uses authenticated `GET /api/states/<entity_id>` requests. It only 
 
 A welcome screen appears as soon as the LCD is initialized and remains while Wi-Fi and Home Assistant connect. The centre panel is composed in memory before transfer to reduce flicker. Unchanged readings are not redrawn, and only changed ring segments are updated.
 
+Welcome remains visible for at least 2.5 seconds, even with a fast Wi-Fi connection. Upload speed is 115200 baud for reliability, and the serial monitor leaves DTR/RTS inactive. Before uploading, stop Serial Monitor with Ctrl+C in its terminal (or close that terminal using the trash icon). A port access-denied error usually means another program has the port open; a failure to connect to the chip indicates a reset/download-mode issue. These settings do not force another application to release a port.
+
 The outer gauge fills clockwise from -10 °C at bottom-left to +40 °C at bottom-right, with a blue → cyan → green → yellow → red gradient. The remaining arc is grey. Values outside the range clamp the gauge to empty/full while the numeric reading remains unchanged. Connection errors clear the coloured arc.
 
 - The firmware retries Wi-Fi connections and polls Home Assistant automatically.
