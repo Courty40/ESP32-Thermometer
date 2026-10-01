@@ -45,7 +45,8 @@ void drawGauge(float celsius, bool valid) {
     const float fraction = constrain((celsius - GAUGE_MIN_C) /
                                      (GAUGE_MAX_C - GAUGE_MIN_C), 0.0f, 1.0f);
     const int filled = valid ? static_cast<int>(roundf(fraction * GAUGE_SEGMENTS)) : 0;
-    display.startWrite();
+    // fillTriangle manages its own SPI transaction. Wrapping it in startWrite
+    // nests beginTransaction calls and can deadlock the ESP32 SPI mutex.
     for (int i = 0; i < GAUGE_SEGMENTS; ++i) {
         const float a = (135.0f + i) * PI / 180.0f;
         const float b = (136.1f + i) * PI / 180.0f; // Slight overlap avoids gaps.
@@ -62,7 +63,6 @@ void drawGauge(float celsius, bool valid) {
         display.fillTriangle(x0, y0, x1, y1, x2, y2, color);
         display.fillTriangle(x0, y0, x2, y2, x3, y3, color);
     }
-    display.endWrite();
 }
 
 void centeredText(const char *text, int16_t y, uint8_t size, uint16_t color) {
@@ -193,6 +193,8 @@ void setup() {
     display.invertDisplay(true);
     display.setTextWrap(false);
     display.fillScreen(GC9A01A_BLACK);
+    digitalWrite(LCD_BL, HIGH);
+    Serial.println("Display initialized; drawing temperature gauge.");
     drawGauge(0, false);
     centeredText("THERMOMETER", 45, 2, GC9A01A_WHITE);
     centeredText("Home Assistant", 200, 1, GC9A01A_DARKGREY);
